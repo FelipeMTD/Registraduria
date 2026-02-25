@@ -1,0 +1,8 @@
+venv/
+.bat
+REGI/
+SUPERVISOR FOS_GEST V1/
+.env
+fosyga.log
+service-account.json
+service-accountFosyga.json

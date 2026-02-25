@@ -1,0 +1,14 @@
+playwright
+
+google-api-python-client
+google-auth
+google-auth-oauthlib
+google-auth-httplib2
+
+gspread
+
+beautifulsoup4
+
+pandas
+
+python-dotenv

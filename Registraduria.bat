@@ -5,11 +5,20 @@ echo ======================================
 echo INICIANDO REGISTRADURIA
 echo ======================================
 
-REM === Ir al directorio del proyecto ===
-cd /d "C:\Users\FELIPE SISTEMAS\Desktop\PROYECTOS SISTEMAS\Fosyga & Registraduria"
+REM === Ir al directorio donde esta este archivo (.bat) ===
+cd /d "%~dp0"
+
+REM === Crear entorno si no existe (Opcional, pero util) ===
+if not exist venv (
+    echo Creando entorno virtual...
+    python -m venv venv
+)
 
 REM === Activar entorno virtual ===
 call venv\Scripts\activate
+
+REM === Instalar dependencias si faltan (Opcional) ===
+REM pip install -r requirements.txt
 
 REM === Verificar Python activo ===
 python --version

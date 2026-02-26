@@ -3,7 +3,13 @@ venv/
 REGI/
 SUPERVISOR FOS_GEST V1/
 .env
-fosyga.log
+*.log
 service-account.json
 service-accountFosyga.json
 basura/
+venv/
+__pycache__/
+*.log
+*.lock
+.DS_Store
+last_run.txt

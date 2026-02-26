@@ -72,7 +72,6 @@ async def ya_muerto_inactivo(page: Page) -> bool:
 
     return (not alive_checked) and (not status_checked) and bool(fecha)
 
-
 async def marcar_fallecido(page: Page, fecha_muerte: str | None = None) -> str:
     """Marca paciente como fallecido + inactivo, setea fecha muerte = hoy.
     Retorna:
@@ -83,7 +82,9 @@ async def marcar_fallecido(page: Page, fecha_muerte: str | None = None) -> str:
     if await ya_muerto_inactivo(page):
         return "SKIP"
 
-    # Obligatorios base (idéntico a tu script)
+    # =====================================================
+    # 🛡️ OBLIGATORIOS BASE (SALVAVIDAS)
+    # =====================================================
     if not await page.locator("select[name='country_origin']").evaluate("el => el.value"):
         await page.select_option("select[name='country_origin']", value="170")
 
@@ -102,6 +103,18 @@ async def marcar_fallecido(page: Page, fecha_muerte: str | None = None) -> str:
     if not await page.locator("input[name='email']").evaluate("el => el.value"):
         await page.fill("input[name='email']", "sincorreo@mtd.net.co")
 
+    # 🔥 NUEVO CAMPO: Tipo de documento persona de contacto (Valor 1 - CC)
+    if not await page.locator("select[name='contact_person_document_type']").evaluate("el => el.value"):
+        await page.select_option("select[name='contact_person_document_type']", value="1")
+
+    # 🔥 NUEVO CAMPO: Tipo de usuario RIPS Resol 3374 (Valor 2 - Subsidiado)
+    if not await page.locator("select[name='plan']").evaluate("el => el.value"):
+        await page.select_option("select[name='plan']", value="2")
+
+    # =====================================================
+    # ⚙️ APLICAR CAMBIOS DE ESTADO (MUERTO / INACTIVO)
+    # =====================================================
+    
     # Activar fallecido (toggle alive)
     await page.evaluate(
         """
@@ -118,6 +131,7 @@ async def marcar_fallecido(page: Page, fecha_muerte: str | None = None) -> str:
         fecha_final = fecha_muerte
     else:
         fecha_final = date.today().strftime("%Y-%m-%d")
+        
     await page.evaluate(
         f"""
         () => {{
@@ -130,7 +144,7 @@ async def marcar_fallecido(page: Page, fecha_muerte: str | None = None) -> str:
         """
     )
 
-    # Status off
+    # Status off (Inactivar)
     await page.evaluate(
         """
         () => {
@@ -141,7 +155,6 @@ async def marcar_fallecido(page: Page, fecha_muerte: str | None = None) -> str:
     )
 
     return "DO"
-
 
 async def guardar(page: Page) -> tuple[bool, str]:
     """Guarda el form y valida confirmación por SweetAlert y persistencia de death_date."""

@@ -1,8 +1,10 @@
 import asyncio
+import time
 from google.oauth2.service_account import Credentials
 import gspread
 from playwright.async_api import async_playwright
 
+# Importamos módulos locales
 from IniciarSesion import create_pool
 from AccionesRegistraduria import (
     abrir_edicion_paciente,
@@ -12,14 +14,9 @@ from AccionesRegistraduria import (
     PacienteNoEncontrado
 )
 
-
-# =====================================================
-# GOOGLE SHEETS
-# =====================================================
-
+# ================= CONFIGURACIÓN DE CUOTA EXTREMA =================
 SERVICE_ACCOUNT_FILE = "service-account.json"
 SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
-
 SHEET_ID = "1wY9sRQ_KbaCiVUb4UHX50NzHweZnMh-YmATtY8UA-mQ"
 HOJA = "REGISTRADURIA"
 
@@ -27,45 +24,26 @@ COL_DOCUMENTO = "DOCUMENTO"
 COL_ESTADO_REG = "ESTADO_REGISTRADURIA"
 COL_ESTADO_GEST = "ESTADO_GESTIONA"
 
-# =====================================================
-# PIPELINE CONFIG
-# =====================================================
-
-WORKERS = 5
-QUEUE_MAX = 2000
+# --- ESTRATEGIA DE AHORRO ---
+WORKERS = 4               
+BATCH_SIZE = 1000         
+PAUSA_ENTRE_LOTES = 5     
+# ----------------------------
 
 URL_PACIENTES = "https://saludgestiona.com/business/patients-list"
 
-PAUSA_ACCION = 0.5
-BATCH_SIZE = 900
-
-# =====================================================
-# SHEET UTILS
-# =====================================================
+# ================= UTILS DE CONEXIÓN =================
 
 def conectar_sheet():
-    creds = Credentials.from_service_account_file(
-        SERVICE_ACCOUNT_FILE,
-        scopes=SCOPES
-    )
-    client = gspread.authorize(creds)
-    return client.open_by_key(SHEET_ID).worksheet(HOJA)
-
-
-def resolver_indices(headers):
-
-    def idx(col):
+    for intento in range(1, 6):
         try:
-            return headers.index(col) + 1
-        except ValueError:
-            raise RuntimeError(f"Falta columna: {col}")
-
-    return (
-        idx(COL_DOCUMENTO),
-        idx(COL_ESTADO_REG),
-        idx(COL_ESTADO_GEST),
-    )
-
+            creds = Credentials.from_service_account_file(SERVICE_ACCOUNT_FILE, scopes=SCOPES)
+            client = gspread.authorize(creds)
+            return client.open_by_key(SHEET_ID).worksheet(HOJA)
+        except Exception as e:
+            print(f"⚠️ Error conexión Sheets ({intento}/5): {e}")
+            time.sleep(10)
+    raise ConnectionError("No se pudo conectar a Google Sheets.")
 
 def col_letra(n):
     s = ""
@@ -74,238 +52,142 @@ def col_letra(n):
         s = chr(65 + r) + s
     return s
 
+# ================= ESCRITURA MASIVA =================
 
 async def batch_writer(ws, result_queue):
-    batch = []
-
-    async def safe_flush(data):
-        if not data:
-            return
-        # Backoff real para 429 (Sheets write quota)
-        wait_s = 2
-        for intento in range(7):
+    buffer = []
+    
+    async def flush(data):
+        if not data: return
+        for i in range(7):
             try:
-                print(f"[WRITER] FLUSH -> {len(data)} registros")
-
                 ws.spreadsheet.values_batch_update({
                     "valueInputOption": "RAW",
                     "data": data
                 })
+                print(f"💾 [CUOTA] Lote de {len(data)} enviado. (1 petición consumida)")
                 return
             except Exception as e:
-                msg = str(e)
-                is_429 = ("429" in msg) or (type(e).__name__ == "APIError" and "Quota exceeded" in msg)
-                print(f"[WRITER] Retry {intento+1}/7 -> {type(e).__name__} -> {e}")
-                await asyncio.sleep(wait_s if is_429 else 2)
-                wait_s = min(wait_s * 2, 60)
-        print("[WRITER] ERROR FATAL: batch perdido")
+                wait_time = (i + 1) * 10
+                if "429" in str(e) or "Quota" in str(e):
+                    print(f"⏳ [LIMITE API] Cuota agotada. Esperando {wait_time}s...")
+                    await asyncio.sleep(wait_time)
+                else:
+                    print(f"❌ [ERROR ESCRITURA] {e}")
+                    await asyncio.sleep(5)
+        print("🚨 [PERDIDA] No se pudo guardar un lote de datos.")
 
-    try:
-        while True:
-            item = await result_queue.get()
-
+    while True:
+        try:
+            item = await asyncio.wait_for(result_queue.get(), timeout=10.0)
             if item is None:
-
-                # ===== FLUSH FINAL OBLIGATORIO =====
-                if batch:
-                    try:
-                        await safe_flush(batch.copy())
-                    except Exception as e:
-                        print("[WRITER FINAL ERROR]", type(e).__name__, e)
-
-                    batch.clear()
-
+                if buffer: await flush(buffer)
                 result_queue.task_done()
                 break
-
-            batch.append(item)
+            
+            buffer.append(item)
             result_queue.task_done()
+            
+            if len(buffer) >= BATCH_SIZE:
+                await flush(buffer.copy())
+                buffer.clear()
+                await asyncio.sleep(PAUSA_ENTRE_LOTES)
 
-            if len(batch) >= BATCH_SIZE:
-                await safe_flush(batch.copy())
-                batch.clear()
+        except asyncio.TimeoutError:
+            if buffer:
+                await flush(buffer.copy())
+                buffer.clear()
 
-    except asyncio.CancelledError:
-        print("[WRITER] Cancelado → flush en finally")
-        return
-
-
-# =====================================================
-# SHEET PRODUCER
-# =====================================================
+# ================= PRODUCER Y WORKER =================
 
 async def producer(ws, job_queue, result_queue, col_gest_letter):
-
-    values = ws.get_all_values()
+    print("⏳ Leyendo base de datos completa (1 sola petición de lectura)...")
+    values = ws.get_all_values() 
+    
     headers = values[0]
-    rows = values[1:]
+    try:
+        idx_doc = headers.index(COL_DOCUMENTO)
+        idx_reg = headers.index(COL_ESTADO_REG)
+        idx_gest = headers.index(COL_ESTADO_GEST)
+    except ValueError as e:
+        print(f"Falta columna: {e}")
+        return 0
 
-    col_doc, col_reg, col_gest = resolver_indices(headers)
+    count = 0
+    for i, row in enumerate(values[1:], start=2):
+        doc = row[idx_doc].strip() if len(row) > idx_doc else ""
+        reg = row[idx_reg].strip() if len(row) > idx_reg else ""
+        gest = row[idx_gest].strip() if len(row) > idx_gest else ""
 
-    total = 0
-
-    for i, row in enumerate(rows, start=2):
-
-        def cell(idx):
-            return row[idx - 1].strip() if len(row) >= idx and row[idx - 1] else ""
-
-        documento = cell(col_doc)
-        estado_reg = cell(col_reg)
-        estado_gest = cell(col_gest)
-
-        if (
-            documento
-            and estado_reg in ("CANCELADA POR MUERTE", "YA_MUERTO")
-            and not estado_gest
-        ):
-            await job_queue.put((i, documento))
-
-            # NO usar update_cell por fila (rompe por cuota 429). Enviar al writer batch.
+        if doc and reg in ("CANCELADA POR MUERTE", "YA_MUERTO") and not gest:
+            await job_queue.put((i, doc))
             await result_queue.put({
                 "range": f"'{HOJA}'!{col_gest_letter}{i}",
                 "values": [["PROCESANDO"]]
             })
+            count += 1
+    return count
 
-            total += 1
-
-    return total
-
-
-# =====================================================
-# WORKER
-# =====================================================
-
-async def worker(worker_id, page, job_queue, result_queue, col_estado_letter, col_gest_letter):
-
+async def worker(wid, page, job_queue, result_queue, col_gest_letter):
     while True:
-
         item = await job_queue.get()
-
         if item is None:
             job_queue.task_done()
             return
-
-        fila, documento = item
-
+        
+        fila, doc = item
         try:
-
-            # Buscar paciente -> abrir edición -> marcar fallecido -> guardar
-            await abrir_edicion_paciente(page, documento, url_pacientes=URL_PACIENTES)
-
+            await abrir_edicion_paciente(page, doc, url_pacientes=URL_PACIENTES)
+            
+            # --- LÓGICA CORREGIDA ---
             if await ya_muerto_inactivo(page):
                 obs = "YA_MUERTO"
             else:
-                res = await marcar_fallecido(page)
-
-                if res == "SKIP":
-                    obs = "YA_MUERTO"
-                else:
-                    ok, msg = await guardar(page)
-
-                    if not ok:
-                        raise RuntimeError(msg)
-
-                    obs = "MUERTE_OK"
-
-            await result_queue.put({
-                "range": f"'{HOJA}'!{col_gest_letter}{fila}",
-                "values": [[obs]]
-            })
-
-            print(f"[W{worker_id}] OK -> {documento}")
-
+                # El robot prepara el formulario
+                await marcar_fallecido(page)
+                # El robot guarda y verifica
+                ok, msg = await guardar(page)
+                obs = "MUERTE_OK" if ok else f"ERR: {msg[:20]}"
+                
         except PacienteNoEncontrado:
             obs = "NO_EXISTE"
-
-            await result_queue.put({
-                "range": f"'{HOJA}'!{col_gest_letter}{fila}",
-                "values": [[obs]]
-            })
-
-            print(f"[W{worker_id}] NO EXISTE -> {documento}")
-
         except Exception as e:
+            obs = f"ERROR"
+            try: await page.goto("about:blank")
+            except: pass
 
-            await result_queue.put({
-                "range": f"'{HOJA}'!{col_gest_letter}{fila}",
-                "values": [[f"ERROR: {type(e).__name__} | {str(e)}"]]
-            })
+        await result_queue.put({
+            "range": f"'{HOJA}'!{col_gest_letter}{fila}",
+            "values": [[obs]]
+        })
+        job_queue.task_done()
 
-            print(f"[W{worker_id}] ERROR -> {documento} -> {type(e).__name__} -> {str(e)}")
-
-        finally:
-            job_queue.task_done()
-
-            # Limpieza defensiva: si el navegador/contexto ya cerró, no reventar el worker.
-            try:
-                await page.goto("about:blank")
-            except Exception as e:
-                # Playwright viejo: TargetClosedError no está expuesto
-                t = type(e).__name__
-                s = str(e)
-                if ("TargetClosed" in t) or ("has been closed" in s) or ("ERR_ABORTED" in s) or ("frame was detached" in s):
-                    return
-                # cualquier otro error, lo ignoras en limpieza
-                pass
-
-
-            await asyncio.sleep(PAUSA_ACCION)
-
-
-# =====================================================
-# MAIN
-# =====================================================
+# ================= MAIN =================
 
 async def main():
-
     ws = conectar_sheet()
-    col_doc, col_reg, col_gest = resolver_indices(ws.row_values(1))
-    col_estado_letter = col_letra(col_reg)
-    col_gest_letter = col_letra(col_gest)
+    col_gest_letter = col_letra(ws.row_values(1).index(COL_ESTADO_GEST) + 1)
 
-    job_queue = asyncio.Queue(maxsize=QUEUE_MAX)
-    result_queue = asyncio.Queue()
+    job_q = asyncio.Queue()
+    res_q = asyncio.Queue()
 
     async with async_playwright() as p:
+        # ATENCIÓN: Lo he dejado en headless=True para producción masiva
+        pool = await create_pool(p, workers=WORKERS, headless=False)
+        
+        writer_t = asyncio.create_task(batch_writer(ws, res_q))
+        workers = [asyncio.create_task(worker(i, pool.pages[i], job_q, res_q, col_gest_letter)) for i in range(WORKERS)]
 
-        pool = None
+        total = await producer(ws, job_q, res_q, col_gest_letter)
+        print(f"📊 {total} fallecidos detectados para procesar.")
 
-        try:
-
-            pool = await create_pool(p, workers=WORKERS, headless=False)
-
-            writer_task = asyncio.create_task(batch_writer(ws, result_queue))
-
-            workers = [
-                asyncio.create_task(
-                    worker(i + 1, pool.pages[i], job_queue, result_queue, col_estado_letter, col_gest_letter)
-                )
-                for i in range(WORKERS)
-            ]
-
-            total = await producer(ws, job_queue, result_queue, col_gest_letter)
-            print(f"[QUEUE] Total a procesar: {total}")
-
-            for _ in range(WORKERS):
-                await job_queue.put(None)
-
-            await job_queue.join()
-
-            # Recuperar excepciones y evitar "Task exception was never retrieved"
-            await asyncio.gather(*workers, return_exceptions=True)
-
-            await result_queue.put(None)
-            await result_queue.join()
-
-            await writer_task
-
-        finally:
-
-            if pool:
-                await pool.close()
-
-    print("[FIN] Proceso terminado limpio.")
-
+        for _ in range(WORKERS): await job_q.put(None)
+        await job_q.join()
+        await asyncio.gather(*workers)
+        
+        await res_q.put(None)
+        await writer_t
+        await pool.close()
 
 if __name__ == "__main__":
     asyncio.run(main())

@@ -72,6 +72,97 @@ async def ya_muerto_inactivo(page: Page) -> bool:
 
     return (not alive_checked) and (not status_checked) and bool(fecha)
 
+# async def marcar_fallecido(page: Page, fecha_muerte: str | None = None) -> str:
+#     """Marca paciente como fallecido + inactivo, setea fecha muerte = hoy.
+#     Retorna:
+#       - 'SKIP' si ya está muerto e inactivo (idempotencia)
+#       - 'DO' si aplicó cambios
+#     """
+
+#     if await ya_muerto_inactivo(page):
+#         return "SKIP"
+
+#     # =====================================================
+#     # 🛡️ OBLIGATORIOS BASE (SALVAVIDAS)
+#     # =====================================================
+#     if not await page.locator("select[name='country_origin']").evaluate("el => el.value"):
+#         await page.select_option("select[name='country_origin']", value="170")
+
+#     if not await page.locator("select[name='center']").evaluate("el => el.value"):
+#         await page.select_option("select[name='center']", value="1")
+
+#     if not await page.locator("select[name='zone']").evaluate("el => el.value"):
+#         await page.select_option("select[name='zone']", value="1")
+
+#     if not await page.locator("input[name='phone_primary']").evaluate("el => el.value"):
+#         await page.fill("input[name='phone_primary']", "1000000000")
+
+#     if not await page.locator("#address_field1").evaluate("el => el.value"):
+#         await page.fill("#address_field1", "1")
+
+#     if not await page.locator("input[name='email']").evaluate("el => el.value"):
+#         await page.fill("input[name='email']", "sincorreo@mtd.net.co")
+
+#     # 🔥 NUEVO CAMPO: Tipo de documento persona de contacto (Valor 1 - CC)
+#     if not await page.locator("select[name='contact_person_document_type']").evaluate("el => el.value"):
+#         await page.select_option("select[name='contact_person_document_type']", value="1")
+
+#     # 🔥 NUEVO CAMPO: Tipo de usuario RIPS Resol 3374 (Forzamos el Valor 2 - Subsidiado)
+#     if not await page.locator("select[name='plan']").count() > 0:
+#         await page.select_option("select[name='plan']", value="2")
+
+#     # 🔥 NUEVO CAMPO AGREGADO: Tipo de usuario Nuevo Resol 2275 (Valor 4 - Subsidiado)
+#     if not await page.locator("select[name='type']").evaluate("el => el.value"):
+#         await page.select_option("select[name='type']", value="4")
+    
+#     if not await page.locator("select[name='country_origin']").evaluate("el => el.value"):
+#         await page.select_option("select[name='country_origin']", value="170")
+
+#     # =====================================================
+#     # ⚙️ APLICAR CAMBIOS DE ESTADO (MUERTO / INACTIVO)
+#     # =====================================================
+    
+#     # Activar fallecido (toggle alive)
+#     await page.evaluate(
+#         """
+#         () => {
+#             const chk = document.querySelector("input[name='alive']");
+#             if (chk && chk.checked) chk.click();
+#         }
+#         """
+#     )
+#     await page.wait_for_timeout(300)
+
+#     # Fecha muerte = hoy (disparando eventos)
+#     if fecha_muerte:
+#         fecha_final = fecha_muerte
+#     else:
+#         fecha_final = date.today().strftime("%Y-%m-%d")
+        
+#     await page.evaluate(
+#         f"""
+#         () => {{
+#             const d = document.querySelector('#death_date');
+#             if (!d) return;
+#             d.value = '{fecha_final}';
+#             d.dispatchEvent(new Event('input', {{ bubbles: true }}));
+#             d.dispatchEvent(new Event('change', {{ bubbles: true }}));
+#         }}
+#         """
+#     )
+
+#     # Status off (Inactivar)
+#     await page.evaluate(
+#         """
+#         () => {
+#             const st = document.querySelector("input[name='status']");
+#             if (st && st.checked) st.click();
+#         }
+#         """
+#     )
+
+#     return "DO"
+
 async def marcar_fallecido(page: Page, fecha_muerte: str | None = None) -> str:
     """Marca paciente como fallecido + inactivo, setea fecha muerte = hoy.
     Retorna:
@@ -85,9 +176,20 @@ async def marcar_fallecido(page: Page, fecha_muerte: str | None = None) -> str:
     # =====================================================
     # 🛡️ OBLIGATORIOS BASE (SALVAVIDAS)
     # =====================================================
-    if not await page.locator("select[name='country_origin']").evaluate("el => el.value"):
-        await page.select_option("select[name='country_origin']", value="170")
+    
+    # 🔥 FORZADO: País de origen siempre a 170 (Colombia)
+    if await page.locator("select[name='country_origin']").count() > 0:
+        await page.locator("select[name='country_origin']").first.select_option(value="170")
 
+    # 🔥 FORZADO: Tipo de usuario RIPS Resol 3374 siempre a 2 (Subsidiado)
+    if await page.locator("select[name='plan']").count() > 0:
+        await page.locator("select[name='plan']").first.select_option(value="2")
+
+    # 🔥 FORZADO: Tipo de usuario Nuevo Resol 2275 siempre a 4 (Subsidiado)
+    if await page.locator("select[name='type']").count() > 0:
+        await page.locator("select[name='type']").first.select_option(value="4")
+
+    # --- Los demás campos se llenan solo si están vacíos ---
     if not await page.locator("select[name='center']").evaluate("el => el.value"):
         await page.select_option("select[name='center']", value="1")
 
@@ -103,13 +205,8 @@ async def marcar_fallecido(page: Page, fecha_muerte: str | None = None) -> str:
     if not await page.locator("input[name='email']").evaluate("el => el.value"):
         await page.fill("input[name='email']", "sincorreo@mtd.net.co")
 
-    # 🔥 NUEVO CAMPO: Tipo de documento persona de contacto (Valor 1 - CC)
     if not await page.locator("select[name='contact_person_document_type']").evaluate("el => el.value"):
         await page.select_option("select[name='contact_person_document_type']", value="1")
-
-    # 🔥 NUEVO CAMPO: Tipo de usuario RIPS Resol 3374 (Valor 2 - Subsidiado)
-    if not await page.locator("select[name='plan']").evaluate("el => el.value"):
-        await page.select_option("select[name='plan']", value="2")
 
     # =====================================================
     # ⚙️ APLICAR CAMBIOS DE ESTADO (MUERTO / INACTIVO)
@@ -155,7 +252,6 @@ async def marcar_fallecido(page: Page, fecha_muerte: str | None = None) -> str:
     )
 
     return "DO"
-
 async def guardar(page: Page) -> tuple[bool, str]:
     """Guarda el form y valida confirmación por SweetAlert y persistencia de death_date."""
 

@@ -25,7 +25,7 @@ COL_ESTADO_REG = "ESTADO_REGISTRADURIA"
 COL_ESTADO_GEST = "ESTADO_GESTIONA"
 
 # --- ESTRATEGIA DE AHORRO ---
-WORKERS = 4               
+WORKERS = 10               
 BATCH_SIZE = 1000         
 PAUSA_ENTRE_LOTES = 5     
 # ----------------------------
@@ -173,7 +173,7 @@ async def main():
 
     async with async_playwright() as p:
         # ATENCIÓN: Lo he dejado en headless=True para producción masiva
-        pool = await create_pool(p, workers=WORKERS, headless=False)
+        pool = await create_pool(p, workers=WORKERS, headless=True)
         
         writer_t = asyncio.create_task(batch_writer(ws, res_q))
         workers = [asyncio.create_task(worker(i, pool.pages[i], job_q, res_q, col_gest_letter)) for i in range(WORKERS)]

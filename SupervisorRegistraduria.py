@@ -1,6 +1,8 @@
 import subprocess
 import sys
 import os
+import gspread
+from google.oauth2.service_account import Credentials
 from datetime import datetime, timedelta
 
 # ================= CONFIG =================
@@ -14,6 +16,37 @@ LAST_RUN_FILE = os.path.join(BASE_DIR, "last_run.txt")
 # Cada cuántos días se permite correr de nuevo (0 = siempre)
 DIAS_FRECUENCIA = 0 
 
+
+def limpiar_pacientes_vivos():
+    """Borra el estado de los pacientes vivos para que sean consultados nuevamente."""
+    print("🧹 Iniciando fase de limpieza de pacientes VIGENTES...")
+    
+    # Reutilizamos tu configuración de Sheets
+    creds = Credentials.from_service_account_file("service-account.json", scopes=["https://www.googleapis.com/auth/spreadsheets"])
+    client = gspread.authorize(creds)
+    ws = client.open_by_key("1wY9sRQ_KbaCiVUb4UHX50NzHweZnMh-YmATtY8UA-mQ").worksheet("REGISTRADURIA")
+    
+    data = ws.get_all_values()
+    headers = data[0]
+    
+    # Localizamos columnas
+    idx_reg = headers.index("ESTADO_REGISTRADURIA")
+    idx_gest = headers.index("ESTADO_GESTIONA")
+    
+    updates = []
+    for i, row in enumerate(data[1:], start=2):
+        # Si el paciente está vivo, borramos sus estados para que el robot lo tome de nuevo
+        if row[idx_reg] == "VIGENTE (VIVO)":
+            # Agregamos a la lista de limpieza (Celda de Registro y Celda de Gestiona)
+            updates.append({'range': gspread.utils.rowcol_to_a1(i, idx_reg + 1), 'values': [['']]})
+            updates.append({'range': gspread.utils.rowcol_to_a1(i, idx_gest + 1), 'values': [['']]})
+
+    if updates:
+        # Usamos batch_update para no agotar la cuota de Google
+        ws.batch_update(updates)
+        print(f"✅ Se han reseteado {len(updates)//2} pacientes vigentes para nueva consulta.")
+    else:
+        print("ℹ️ No hay pacientes vigentes para limpiar.")
 # ================= CONTROL TIEMPO =================
 
 def debe_ejecutar(path, dias):
@@ -73,6 +106,7 @@ if __name__ == "__main__":
     crear_lock(LOCK_FILE)
 
     try:
+        limpiar_pacientes_vivos()
         print("\n=== [1/2] EJECUTANDO CONSULTA REGISTRADURIA (SHEETS) ===")
         r1 = subprocess.run([sys.executable, SHEET_SCRIPT])
 

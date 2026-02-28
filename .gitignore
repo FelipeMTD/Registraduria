@@ -13,3 +13,4 @@ __pycache__/
 *.lock
 .DS_Store
 last_run.txt
+*.zip

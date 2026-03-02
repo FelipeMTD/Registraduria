@@ -72,6 +72,7 @@ async def ya_muerto_inactivo(page: Page) -> bool:
 
     return (not alive_checked) and (not status_checked) and bool(fecha)
 
+
 # async def marcar_fallecido(page: Page, fecha_muerte: str | None = None) -> str:
 #     """Marca paciente como fallecido + inactivo, setea fecha muerte = hoy.
 #     Retorna:
@@ -85,9 +86,20 @@ async def ya_muerto_inactivo(page: Page) -> bool:
 #     # =====================================================
 #     # 🛡️ OBLIGATORIOS BASE (SALVAVIDAS)
 #     # =====================================================
-#     if not await page.locator("select[name='country_origin']").evaluate("el => el.value"):
-#         await page.select_option("select[name='country_origin']", value="170")
+    
+#     # 🔥 FORZADO: País de origen siempre a 170 (Colombia)
+#     if await page.locator("select[name='country_origin']").count() > 0:
+#         await page.locator("select[name='country_origin']").first.select_option(value="170")
 
+#     # 🔥 FORZADO: Tipo de usuario RIPS Resol 3374 siempre a 2 (Subsidiado)
+#     if await page.locator("select[name='plan']").count() > 0:
+#         await page.locator("select[name='plan']").first.select_option(value="2")
+
+#     # 🔥 FORZADO: Tipo de usuario Nuevo Resol 2275 siempre a 4 (Subsidiado)
+#     if await page.locator("select[name='type']").count() > 0:
+#         await page.locator("select[name='type']").first.select_option(value="4")
+
+#     # --- Los demás campos se llenan solo si están vacíos ---
 #     if not await page.locator("select[name='center']").evaluate("el => el.value"):
 #         await page.select_option("select[name='center']", value="1")
 
@@ -103,20 +115,8 @@ async def ya_muerto_inactivo(page: Page) -> bool:
 #     if not await page.locator("input[name='email']").evaluate("el => el.value"):
 #         await page.fill("input[name='email']", "sincorreo@mtd.net.co")
 
-#     # 🔥 NUEVO CAMPO: Tipo de documento persona de contacto (Valor 1 - CC)
 #     if not await page.locator("select[name='contact_person_document_type']").evaluate("el => el.value"):
 #         await page.select_option("select[name='contact_person_document_type']", value="1")
-
-#     # 🔥 NUEVO CAMPO: Tipo de usuario RIPS Resol 3374 (Forzamos el Valor 2 - Subsidiado)
-#     if not await page.locator("select[name='plan']").count() > 0:
-#         await page.select_option("select[name='plan']", value="2")
-
-#     # 🔥 NUEVO CAMPO AGREGADO: Tipo de usuario Nuevo Resol 2275 (Valor 4 - Subsidiado)
-#     if not await page.locator("select[name='type']").evaluate("el => el.value"):
-#         await page.select_option("select[name='type']", value="4")
-    
-#     if not await page.locator("select[name='country_origin']").evaluate("el => el.value"):
-#         await page.select_option("select[name='country_origin']", value="170")
 
 #     # =====================================================
 #     # ⚙️ APLICAR CAMBIOS DE ESTADO (MUERTO / INACTIVO)
@@ -163,18 +163,18 @@ async def ya_muerto_inactivo(page: Page) -> bool:
 
 #     return "DO"
 
-async def marcar_fallecido(page: Page, fecha_muerte: str | None = None) -> str:
-    """Marca paciente como fallecido + inactivo, setea fecha muerte = hoy.
-    Retorna:
-      - 'SKIP' si ya está muerto e inactivo (idempotencia)
-      - 'DO' si aplicó cambios
+async def marcar_fallecido(page: Page, fecha_muerte: str | None = None) -> tuple[str, str]:
     """
-
+    Configura el formulario para marcar fallecido.
+    Retorna: (Acción realizada 'DO'/'SKIP', Fecha aplicada)
+    """
+    # Si ya cumple las condiciones, saltamos y retornamos la fecha que ya tiene
     if await ya_muerto_inactivo(page):
-        return "SKIP"
+        fecha_actual = await page.locator("#death_date").evaluate("el => el.value")
+        return "SKIP", fecha_actual
 
     # =====================================================
-    # 🛡️ OBLIGATORIOS BASE (SALVAVIDAS)
+    # 🛡️ OBLIGATORIOS BASE (SALVAVIDAS FORZADOS)
     # =====================================================
     
     # 🔥 FORZADO: País de origen siempre a 170 (Colombia)
@@ -189,7 +189,15 @@ async def marcar_fallecido(page: Page, fecha_muerte: str | None = None) -> str:
     if await page.locator("select[name='type']").count() > 0:
         await page.locator("select[name='type']").first.select_option(value="4")
 
-    # --- Los demás campos se llenan solo si están vacíos ---
+ # 🔥 SALVAVIDAS: Nivel Salarial (Si está vacío o es 0, poner 1)
+    if await page.locator("input[name='level']").count() > 0:
+        nivel_val = await page.locator("input[name='level']").evaluate("el => el.value")
+        if not nivel_val or nivel_val.strip() == "0":
+            await page.fill("input[name='level']", "1")
+            
+    # =====================================================
+    # 🛡️ SALVAVIDAS CONDICIONALES (Solo si están vacíos)
+    # =====================================================
     if not await page.locator("select[name='center']").evaluate("el => el.value"):
         await page.select_option("select[name='center']", value="1")
 
@@ -212,7 +220,7 @@ async def marcar_fallecido(page: Page, fecha_muerte: str | None = None) -> str:
     # ⚙️ APLICAR CAMBIOS DE ESTADO (MUERTO / INACTIVO)
     # =====================================================
     
-    # Activar fallecido (toggle alive)
+    # Activar fallecido (desmarcar 'alive')
     await page.evaluate(
         """
         () => {
@@ -223,12 +231,8 @@ async def marcar_fallecido(page: Page, fecha_muerte: str | None = None) -> str:
     )
     await page.wait_for_timeout(300)
 
-    # Fecha muerte = hoy (disparando eventos)
-    if fecha_muerte:
-        fecha_final = fecha_muerte
-    else:
-        fecha_final = date.today().strftime("%Y-%m-%d")
-        
+    # Definir y aplicar fecha (Columna E en Sheets)
+    fecha_final = fecha_muerte if fecha_muerte else date.today().strftime("%Y-%m-%d")
     await page.evaluate(
         f"""
         () => {{
@@ -241,7 +245,7 @@ async def marcar_fallecido(page: Page, fecha_muerte: str | None = None) -> str:
         """
     )
 
-    # Status off (Inactivar)
+    # Status off (Inactivar / desmarcar 'status')
     await page.evaluate(
         """
         () => {
@@ -251,7 +255,8 @@ async def marcar_fallecido(page: Page, fecha_muerte: str | None = None) -> str:
         """
     )
 
-    return "DO"
+    return "DO", fecha_final
+
 async def guardar(page: Page) -> tuple[bool, str]:
     """Guarda el form y valida confirmación por SweetAlert y persistencia de death_date."""
 
@@ -392,13 +397,25 @@ async def guardar_generico(page: Page) -> tuple[bool, str]:
 
 
 
-async def procesar_muerte_registraduria(page: Page, documento: str, *, url_pacientes: str) -> str:
-    """Orquesta: buscar->abrir edición->marcar fallecido->guardar (si aplica)."""
+async def procesar_muerte_registraduria(page: Page, documento: str, *, url_pacientes: str) -> tuple[str, str]:
+    """
+    Orquesta: buscar -> abrir edición -> marcar fallecido -> guardar.
+    Retorna: (Estado para ESTADO_GESTIONA, Fecha para FECHA_FALLECIDO)
+    """
+    # 1. Navegar y abrir el formulario del paciente
     await abrir_edicion_paciente(page, documento, url_pacientes=url_pacientes)
-    res = await marcar_fallecido(page)
-    if res == "SKIP":
-        return "SKIP"
+    
+    # 2. Intentar marcar como fallecido (obtenemos acción y la fecha que se usó)
+    accion, fecha = await marcar_fallecido(page)
+    
+    # Caso A: El paciente ya estaba marcado como muerto e inactivo
+    if accion == "SKIP":
+        return "YA_MUERTO", fecha
+    
+    # Caso B: Se aplicaron cambios nuevos, procedemos a guardar
     ok, msg = await guardar(page)
     if not ok:
-        raise RuntimeError(msg)
-    return "OK"
+        raise RuntimeError(msg) # Si falla el guardado, el worker capturará el error
+    
+    # Retornamos el estado de éxito y la fecha que se grabó en el CRM
+    return "MUERTE_OK", fecha

@@ -97,13 +97,12 @@ def liberar_lock(path):
 
 if __name__ == "__main__":
 
-    # 1. Verificar Frecuencia
-    if not debe_ejecutar(LAST_RUN_FILE, DIAS_FRECUENCIA):
-        print("No es necesario ejecutar hoy (Frecuencia configurada).")
-        sys.exit(0)
+    # # 1. Verificar Frecuencia
+    # if not debe_ejecutar(LAST_RUN_FILE, DIAS_FRECUENCIA):
+    #     print("No es necesario ejecutar hoy (Frecuencia configurada).")
+    #     sys.exit(0)
 
-    # 2. Crear Bloqueo
-    crear_lock(LOCK_FILE)
+   
 
     try:
         limpiar_pacientes_vivos()
@@ -127,7 +126,3 @@ if __name__ == "__main__":
 
     except KeyboardInterrupt:
         print("\nCANCELADO POR EL USUARIO.")
-
-    finally:
-        # Siempre liberar el lock, incluso si falla
-        liberar_lock(LOCK_FILE)

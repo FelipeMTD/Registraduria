@@ -5,7 +5,8 @@ from google.oauth2.service_account import Credentials
 import os
 import time
 import random
-
+from Logger import get_logger
+logger = get_logger("CONSULTA_REG")
 # ================= CONFIGURACIÓN STEALTH (SIGILOSA) =================
 SERVICE_ACCOUNT_FILE = "service-account.json"
 SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
@@ -94,6 +95,7 @@ async def obtener_estado(page, documento: str) -> str:
 # ================= PIPELINE MASIVO =================
 
 async def job_producer(ws, job_queue, idx_doc, idx_est, idx_tipo):
+    logger.info("Leyendo hoja (modo robusto)...")
     print("⏳ Leyendo hoja (modo robusto)...")
     values = []
     for intento in range(3):
@@ -101,13 +103,15 @@ async def job_producer(ws, job_queue, idx_doc, idx_est, idx_tipo):
             values = ws.get_all_values()
             break
         except Exception as e:
+            logger.warning(f"Error leyendo hoja (Intento {intento+1}): {e}")
             print(f"⚠️ Error leyendo hoja (Intento {intento+1}): {e}")
             time.sleep(5)
     
     if not values:
+        logger.error("No se pudo leer la hoja.")
         print("❌ No se pudo leer la hoja.")
         return 0
-
+    logger.info(f"Hoja leída. Total filas: {len(values)}. Filtrando pendientes...")
     print(f"✅ Hoja leída. Total filas: {len(values)}. Filtrando pendientes...")
     
     encolados = 0
@@ -171,10 +175,12 @@ async def flush(ws, data):
     for intento in range(5):
         try:
             ws.spreadsheet.values_batch_update({"valueInputOption": "RAW", "data": data})
+            logger.info(f"[GUARDADO] {len(data)} registros en Sheets.")
             print(f"💾 [GUARDADO] {len(data)} registros.")
             return
         except Exception as e:
             wait = (intento + 1) * 5
+            logger.warning(f"[API BUSY] Esperando {wait}s... {e}")
             print(f"⚠️ [API BUSY] Esperando {wait}s... {e}")
             await asyncio.sleep(wait)
 
@@ -184,6 +190,7 @@ async def main():
     try:
         ws = conectar_sheet()
     except Exception as e:
+        logger.error(f"Error conectando a Sheets: {e}")
         print(f"❌ Error conectando a Sheets: {e}")
         return
 
@@ -193,6 +200,7 @@ async def main():
     res_q = asyncio.Queue()
 
     async with async_playwright() as p:
+        logger.info("Iniciando Motor en MODO STEALTH (Sigiloso)...")
         print("🚀 Iniciando Motor en MODO STEALTH (Sigiloso)...")
         
         # --- TRUCO ANTIBLOQUEO ---
@@ -223,7 +231,7 @@ async def main():
             await ctx.route("**/*.{png,jpg,jpeg,svg,gif}", lambda route: route.abort())
             
             pages.append(await ctx.new_page())
-        
+        logger.info(f"{NUM_WORKERS} Workers Stealth listos.")
         print(f"✅ {NUM_WORKERS} Workers Stealth listos.")
 
         writer_task = asyncio.create_task(batch_writer(ws, res_q))
@@ -234,9 +242,11 @@ async def main():
         ]
 
         total = await job_producer(ws, job_q, idx_doc, idx_est, idx_tipo)
+        logger.info(f"Total pendientes a consultar: {total}")
         print(f"📊 Total pendientes: {total}")
 
         if total == 0:
+            logger.info("Nada pendiente.")
             print("Nada pendiente.")
             for _ in range(NUM_WORKERS): await job_q.put(None)
             await res_q.put(None)
@@ -250,7 +260,7 @@ async def main():
         await res_q.put(None)
         await writer_task
         await browser.close()
-    
+    logger.info("Proceso de Consulta Finalizado.")
     print("🏁 Proceso Finalizado.")
 
 if __name__ == "__main__":

@@ -4,7 +4,8 @@ import os
 import gspread
 from google.oauth2.service_account import Credentials
 from datetime import datetime, timedelta
-
+from Logger import get_logger
+logger = get_logger("SUPERVISOR")
 # ================= CONFIG =================
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -18,6 +19,7 @@ DIAS_FRECUENCIA = 0
 
 
 def limpiar_pacientes_vivos():
+    logger.info("Iniciando fase de limpieza de pacientes VIGENTES...")
     """Borra el estado de los pacientes vivos para que sean consultados nuevamente."""
     print("🧹 Iniciando fase de limpieza de pacientes VIGENTES...")
     
@@ -44,8 +46,10 @@ def limpiar_pacientes_vivos():
     if updates:
         # Usamos batch_update para no agotar la cuota de Google
         ws.batch_update(updates)
+        logger.info(f"Se han reseteado {len(updates)//2} pacientes vigentes para nueva consulta.")
         print(f"✅ Se han reseteado {len(updates)//2} pacientes vigentes para nueva consulta.")
     else:
+        logger.info("No hay pacientes vigentes para limpiar.")
         print("ℹ️ No hay pacientes vigentes para limpiar.")
 # ================= CONTROL TIEMPO =================
 
@@ -106,22 +110,26 @@ if __name__ == "__main__":
 
     try:
         limpiar_pacientes_vivos()
+        logger.info("=== [1/2] EJECUTANDO CONSULTA REGISTRADURIA (SHEETS) ===")
         print("\n=== [1/2] EJECUTANDO CONSULTA REGISTRADURIA (SHEETS) ===")
         r1 = subprocess.run([sys.executable, SHEET_SCRIPT])
 
         if r1.returncode != 0:
+            logger.error("ERROR CRÍTICO EN SHEET REGISTRADURIA. DETENIENDO PROCESO.")
             print("❌ ERROR CRÍTICO EN SHEET REGISTRADURIA. DETENIENDO PROCESO.")
             sys.exit(1)
-
+        logger.info("=== [2/2] EJECUTANDO ACTUALIZACION CRM (GESTIONA) ===")
         print("\n=== [2/2] EJECUTANDO ACTUALIZACION CRM (GESTIONA) ===")
         r2 = subprocess.run([sys.executable, GESTIONA_SCRIPT])
 
         if r2.returncode != 0:
+            logger.error("ERROR CRÍTICO EN GESTIONA REGISTRADURIA.")
             print("❌ ERROR CRÍTICO EN GESTIONA REGISTRADURIA.")
             sys.exit(1)
 
         # Si todo salió bien, marcamos la fecha
         marcar_ejecucion(LAST_RUN_FILE)
+        logger.info("REGISTRADURIA COMPLETADO CORRECTAMENTE.")
         print("\n✅ REGISTRADURIA COMPLETADO CORRECTAMENTE.")
 
     except KeyboardInterrupt:

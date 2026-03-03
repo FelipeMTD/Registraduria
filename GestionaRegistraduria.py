@@ -3,6 +3,8 @@ import time
 from google.oauth2.service_account import Credentials
 import gspread
 from playwright.async_api import async_playwright
+from Logger import get_logger
+logger = get_logger("CRM_GESTIONA")
 
 # Importamos módulos locales
 from IniciarSesion import create_pool
@@ -42,6 +44,7 @@ def conectar_sheet():
             client = gspread.authorize(creds)
             return client.open_by_key(SHEET_ID).worksheet(HOJA)
         except Exception as e:
+            logger.warning(f"Error conexión Sheets ({intento}/5): {e}")
             print(f"⚠️ Error conexión Sheets ({intento}/5): {e}")
             time.sleep(10)
     raise ConnectionError("No se pudo conectar a Google Sheets.")
@@ -66,14 +69,17 @@ async def batch_writer(ws, result_queue):
                     "valueInputOption": "RAW",
                     "data": data
                 })
+                logger.info(f"[CUOTA] Lote de {len(data)} actualizaciones enviado a Sheets.")
                 print(f"💾 [CUOTA] Lote de {len(data)} actualizaciones enviado.")
                 return
             except Exception as e:
                 wait_time = (i + 1) * 10
                 if "429" in str(e) or "Quota" in str(e):
+                    logger.warning(f"[LIMITE API] Cuota agotada. Esperando {wait_time}s...")
                     print(f"⏳ [LIMITE API] Cuota agotada. Esperando {wait_time}s...")
                     await asyncio.sleep(wait_time)
                 else:
+                    logger.error(f"[ERROR ESCRITURA] {e}")
                     print(f"❌ [ERROR ESCRITURA] {e}")
                     await asyncio.sleep(5)
 
@@ -101,6 +107,7 @@ async def batch_writer(ws, result_queue):
 # ================= PRODUCER Y WORKER =================
 
 async def producer(ws, job_queue, result_queue, col_gest_letter, col_fecha_letter):
+    logger.info("Leyendo base de datos completa de Sheets...")
     print("⏳ Leyendo base de datos completa...")
     values = ws.get_all_values() 
     headers = values[0]
@@ -110,6 +117,7 @@ async def producer(ws, job_queue, result_queue, col_gest_letter, col_fecha_lette
         idx_reg = headers.index(COL_ESTADO_REG)
         idx_gest = headers.index(COL_ESTADO_GEST)
     except ValueError as e:
+        logger.error(f"Falta columna: {e}")
         print(f"Falta columna: {e}")
         return 0
 
@@ -203,6 +211,7 @@ async def main():
         ]
 
         total = await producer(ws, job_q, res_q, col_gest_letter, col_fecha_letter)
+        logger.info(f"{total} pacientes fallecidos detectados listos para procesar en CRM.")
         print(f"📊 {total} fallecidos detectados para procesar.")
 
         for _ in range(WORKERS): await job_q.put(None)

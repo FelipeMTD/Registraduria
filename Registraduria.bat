@@ -46,4 +46,3 @@ echo ======================================
 echo REGISTRADURIA FINALIZADO
 echo ======================================
 
-pause
